@@ -153,14 +153,26 @@ def compute_baseline_stats(row, roi=None, verbose=False, adu_convert=1, **kwargs
     arr = pf.getdata(row['FILENAME'], row['EXTN'])[0] *adu_convert # [0] selects baseline image
     return compute_stats(arr[roi], **kwargs)
 
-def compute_cds_stats(row, roi=None, verbose=False, **kwargs):
+def get_cds_image(row, roi=None, verbose=False, gainfits=False):
     if verbose: print(row['FILENAME'], row['EXTNAME'])
+    kgain = row['GAINFITS'] if gainfits else int(1)
+
     arr = pf.getdata(row['FILENAME'], row['EXTN']).astype(np.int16) # enable values <0
 
     roi3D = roi if len(roi)==3 else (slice(None),) + roi
     assert len(roi3D) == 3
 
     arr = arr[roi3D]  # Extract region before CDS subtraction (for efficiency)
-    img = arr[1] - arr[0]
+    img = (arr[1] - arr[0]) * kgain
+    return img
+
+def compute_cds_stats(row, roi=None, verbose=False, gainfits=False, **kwargs):
+
+    img = get_cds_image(row, roi=roi, verbose=verbose, gainfits=gainfits)
     return compute_stats(img, **kwargs)
 
+def compute_cds_histogram(row, roi=None, verbose=False, gainfits=False, **kwargs):
+
+    img = get_cds_image(row, roi=roi, verbose=verbose, gainfits=gainfits)
+    hist = np.histogram(img, **kwargs)
+    return hist[0]

@@ -143,7 +143,7 @@ def main():
         dflist = []
         for f, ledv in zip(flist, LEDVlist):
             dfi = RCtools.all_headers_to_df(f)
-            assert len(dfi) == N_CLRTEST,               f'{f}: expected {N_CLRTEST} extensions, got {len(dfi)}'
+            assert len(dfi) == N_CLRTEST, f"{f}: expected {N_CLRTEST} extensions, got {len(dfi)}"
             # assert N_CLRTEST % len(VHIGH_TG_list) == 0, 'N_CLRTEST must be divisible by number of VHIGH_TG values'
             # NVrepeat = N_CLRTEST // len(VHIGH_TG_list)
             # dfi['VHIGH_TG'] = np.tile(VHIGH_TG_list, (NVrepeat, 1)).T.flatten()
@@ -166,12 +166,14 @@ def main():
         df['FLASHI'] = flashi  # FLASHI column is 0 for each flash and counts up
 
         # Convert VHIGH_TG to volts
-        df[TGKEY] = round( RCtools.DAC_to_V(df[TGKEY]) , 3)
+        df[TGKEY] = round( RCtools.DAC_to_V(df[TGKEY]) , 2)
 
         print('Processing images...')
+        gainfits = True
         rows = df.progress_apply(RCtools.compute_cds_stats,
-                        axis=1, clip_sigma=SIGMACLIP, do_median=False, roi=roi).tolist()
+                        axis=1, clip_sigma=SIGMACLIP, do_median=False, roi=roi, gainfits=gainfits).tolist()
 
+        df['units'] = 'e-' if gainfits else 'ADUf'
         df = pd.concat([df, pd.DataFrame(rows)], axis=1)
 
         # ── Save CSV ─────────────────────────────────────────────────────────
@@ -179,28 +181,74 @@ def main():
         df.to_csv(outcsv, index=False)
         print(f'Saved: {outcsv}')
 
-    # ── Plot Lag vs. stimulus for each VHIGH_TG ──────────────────────────────
-    outpng = stem + '_lag0.png'
+    # Identify units for plots
+    units = df['units'].iloc[0]  # Assumes all units are same
 
-    plt.figure(figsize=(5, 10))
+
+    print('Starting plots...')
+
+    # ── Timeseries of ROI mean for each VHIGH_TG ──────────────────────────────
+
+    outpng = stem + '_tseries.png'
+
+    vlist = df['LEDV'].unique()
+    
+    fig, axes = plt.subplots(nrows=len(vlist), sharex=True, 
+                            figsize=(8, 2.5*len(vlist))) # scale figure to number of bias voltages
+
+    ax = axes[0]
+    ax.text(1, 1.1, 'LEDV', transform=ax.transAxes)
+
+    for ax,v in zip(axes,vlist):
+        df_v = df[df['LEDV'] == v].reset_index()
+
+        ax.plot(df_v['mean'], label=f'{v}')
+        # ax.legend(title=TGKEY, loc='center left')
+        ax.text(1.02, 0.5, str(v), transform=ax.transAxes)
+        ax.set_ylabel(f'ROI mean ({units})')
+
+    plt.xlabel('Frame Number')
+    # plt.tight_layout()
+    plt.savefig(outpng)
+    # plt.show()
+    print('Saved '+outpng)
+
+    # ── Plot 1st Lag vs. stimulus for each VHIGH_TG ──────────────────────────────
+
+    markersize=4
+    marker='s'
+
+    outpng = stem + '_lag1.png'
+
+    fig, axes = plt.subplots(nrows=2, sharex=True, figsize=(8, 8)) 
 
     for v in df[TGKEY].unique():
         df_v = df[df[TGKEY] == v].reset_index()
 
         i_flash = df_v.index[df_v['FLASH'] == True]
-        x = df_v.loc[i_flash]['mean']       # images with flashes
-        y = df_v.loc[i_flash + 1]['mean']   # images just after flashes
-        z = df_v.loc[i_flash - 1]['mean']   # images just before flashes
+        x = df_v.loc[i_flash]['mean'].values       # images with flashes
+        y = df_v.loc[i_flash + 1]['mean'].values   # images just after flashes
+        z = df_v.loc[i_flash - 1]['mean'].values   # images just before flashes
 
-        plt.scatter(x.values - z.values, y.values - z.values, label=f'{v}', s=10)
+        axes[0].plot(x-z, y-z, label=f'{v}', 
+                    markersize=markersize, marker=marker)
+
+        axes[1].plot(x-z, (y-z)/(x-z), label=f'{v}', 
+                    markersize=markersize, marker=marker)
 
     plt.xscale('log')
-    plt.xlabel('Stimulus (ADU)')
-    plt.ylabel('Lag_0 (ADU)')
-    plt.legend(title=f'{TGKEY}')
+    axes[1].set_xlabel(f'Stimulus ({units})')
+    axes[0].set_ylabel(f'Lag_1 ({units})')
+    axes[1].set_ylabel(f'Lag_1 fraction')
+    axes[0].legend(title=f'{TGKEY}')
+    axes[1].legend(title=f'{TGKEY}')
+
+    plt.tight_layout()
     plt.savefig(outpng)
     # plt.show()
-    print(f'Saved: {outpng}')
+    print('Saved '+outpng)
+
+    # breakpoint()
 
 
     # ── Plot Lag vs. frame for each VHIGH_TG, highest stimulus only ──────────────────────────────
@@ -210,26 +258,74 @@ def main():
     plt.figure()
     plt.title('Timeseries after flash (Frame 0)')
 
-    for v in df[TGKEY].unique():
-        df_v = df[df[TGKEY] == v].reset_index()
+    df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
+    # df_max = df[df['LEDV']==max(LEDVlist)].reset_index()  # Brightest LED setting
 
-        i_flash = df_v.index[(df_v[TIMEKEY]==df_v[TIMEKEY].max()) * (df_v['LEDV']==df_v['LEDV'].max()) ]  # Brightest flash
+    for v in df_max[TGKEY].unique():
+        df_v = df_max[df_max[TGKEY] == v].reset_index()
+
+        i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Brightest flash
         i_flash = i_flash[0] # Should only have 1 element
 
         y = df_v.loc[i_flash:i_flash+N_LAG]['mean']  # series after flash
         z = df_v.loc[i_flash - 1]['mean']   # images just before flashes
 
-        # breakpoint()
-
-        plt.scatter(range(len(y)), y.values - z, label=f'{v}', s=10)
+        plt.plot(range(len(y)), y.values - z, label=f'{v}',
+                    markersize=markersize, marker=marker)
 
     plt.yscale('log')
     plt.xlabel('Frame #')
-    plt.ylabel('ROI mean (ADU)')
+    plt.ylabel(f'ROI mean ({units})')
     plt.legend(title=f'{TGKEY}')
     plt.savefig(outpng)
     # plt.show()
-    print(f'Saved: {outpng}')
+    print('Saved '+outpng)
+
+
+    # -- Plot histograms for all VHIGH_TG ------------------------------------
+    print('Plotting histograms...')
+
+    df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
+    # df_max = df[df['LEDV']==max(LEDVlist)].reset_index()  # Brightest LED setting
+
+    i_flash = df_max.index[(df_max[TIMEKEY]==df_max[TIMEKEY].max())]  # List of max flashes, 1 for each VHIGH_TG
+
+    ## HARDCODES
+
+    roi = (slice(10,410), slice(256*2,256*3))
+    BINSTEP = 1
+    gainfits = True
+    units = 'e-' if gainfits else 'ADUf'
+    MAXMARGIN = 3  # Histogram upper limit -- multiplies max mean lag of each VHIGH_TG
+
+    for ii in np.arange(N_LAG)+1:  # count frames after each flash
+
+        outpng = stem + f'_hist{ii}.png'
+        df_lag = df_max.loc[i_flash+ii] # iith row after the flashes 
+
+        kgain = df_lag['GAINFITS'].iloc[0]
+
+        binmax = int( df_max[df_max['FLASHI']==ii]['mean'].max() * MAXMARGIN )
+        bins = np.arange(0,binmax,BINSTEP*kgain)  # Scale BINSTEP by kgain to avoid weird rounding effects in plots
+        x = (bins[1:]+bins[:-1])/2
+
+        plt.figure()
+        plt.title(f'Lag Histogram ({ii} frames after flash)')
+
+        hist_list = df_lag.progress_apply(RCtools.compute_cds_histogram, axis=1, roi=roi, gainfits=gainfits, bins=bins).tolist()
+
+        for (y, v) in zip(hist_list, df_lag[TGKEY]):
+            plt.plot(x, y, label=v)
+
+        plt.legend(title=f'{TGKEY}', loc='upper right')
+        plt.xlabel(f'Lag ({units})')
+        plt.ylabel('Frequency')
+
+        # plt.show()
+        plt.savefig(outpng)
+        print('Saved '+outpng)
+
+    # breakpoint()
 
 
 if __name__ == '__main__':
