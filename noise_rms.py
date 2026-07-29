@@ -1,6 +1,6 @@
 # noise_rms.py
 #
-# Computes a RMS noise map per-pixel from a multi-exwtension FITS file.
+# Computes a RMS noise map per-pixel from a multi-extension FITS file after excluding dead channels.
 # Each HDU contains a (2, 4096, 4096) cube; so we do CDS = scan1 - scan0.
 # (scan0 is baseline)
 # The RMS map is the standard deviation of CDS frames over all ~100 frames.
@@ -9,16 +9,18 @@
 #   /disk/bifrost/uvexdet/miniconda3/bin/python3 noise_rms.py <input.fits>                      # uses GAINFITS or fallback_gain value, and output_dir
 #   /disk/bifrost/uvexdet/miniconda3/bin/python3 noise_rms.py <input.fits> --gain 1.131         # takes gain value as input, uses output_dir
 #   /disk/bifrost/uvexdet/miniconda3/bin/python3 noise_rms.py <input.fits> --outdir /some/path/ # uses fallback_gain value, takes outdir as input
+#   example: /disk/bifrost/uvexdet/miniconda3/bin/python3 /disk/bifrost/nkerkese/noise_rms.py /disk/bifrost/nkerkese/260629/260630_012720_noise_hg.fits --outdir /disk/bifrost/nkerkese/260629/ --temp 166 --gain 1.09
 #
-# Outputs (all saved to output_dir):
-#   <basename>_rms.fits        — per-pixel RMS map
-#   <basename>_rms.png         — display image of RMS map
-#   <basename>_hist.png        — histogram of all pixel RMS values
-#   <basename>_stats.csv       — statistics table (full image, before/after sigma clip)
+# Outputs (all saved to output_dir/<basename>/):
+#   <basename>_cds.fits            — CDS stack (scan1 - scan0) used to compute RMS
+#   <basename>_rms.fits            — per-pixel RMS map
+#   <basename>_rms.png              — display image of RMS map, with clean boxes overlaid
+#   <basename>_hist.png             — histogram of RMS values (clean-box pixels only), log + linear
+#   <basename>_noise_fraction.png   — RMS noise vs. fraction of pixels used (clean-box pixels only)
+#   <basename>_stats.csv            — statistics table (clean-box pixels, before/after sigma clip)
+#   <basename>_slide.png            — combined tile of hist + noise_fraction + rms map, for slides
 #
-# then download rms fits file - scp nkerkese@bifrost.caltech.edu:/disk/bifrost/nkerkese/260607somehting.fits .
-
-
+# then download all pngs/csvs to Mac - see rsync command in pipeline notes
 
 
 import numpy as np
@@ -30,6 +32,7 @@ import csv
 import os
 import sys
 import argparse
+import matplotlib.patches as patches
 
 # Parameters that can be changed
 
@@ -181,33 +184,6 @@ def find_clean_boxes(rms_map):
 
     return clean_boxes
 
-# def save_row_profile(rms_map, out_path):
-#     """
-#     Left plot: mean RMS per row (collapse columns).
-#     Right plot: mean RMS per column (collapse rows).
-#     """
-#     row_mean = np.mean(rms_map, axis=1)
-#     col_mean = np.mean(rms_map, axis=0)
-
-#     fig, ax = plt.subplots(1, 2, figsize=(14, 4))
-
-#     ax[0].plot(row_mean, np.arange(len(row_mean)), lw=0.8)
-#     ax[0].set_xlabel('Mean RMS (e⁻)')
-#     ax[0].set_ylabel('Row number')
-#     ax[0].set_title('Mean RMS per Row')
-#     ax[0].set_xlim(0, 10)
-
-#     ax[1].plot(np.arange(len(col_mean)), col_mean, lw=0.8)
-#     ax[1].set_xlabel('Column number')
-#     ax[1].set_ylabel('Mean RMS (e⁻)')
-#     ax[1].set_title('Mean RMS per Column')
-#     ax[1].set_ylim(0, 8)
-
-#     plt.tight_layout()
-#     plt.savefig(out_path)
-#     plt.close()
-#     print(f"Saved row profile: {out_path}")
-
 
 def compute_stats(rms, label, sigma_val, max_iter, temp, GAINUSER_value, gain):
     """
@@ -318,12 +294,11 @@ def save_histogram(rms_flat, stat_rows, out_path, label='Full Image', temp=None)
     xmax = rms_flat.max()
     xmin_log = max(xmin, 1e-6)
 
-    #bins = np.linspace(xmin, xmax, 100)  # we have 16,777,216 pixels/300 ~ 55,000 pixels in each bar?
-    bins_log = np.logspace(np.log10(xmin_log), np.log10(xmax), 100)
 
     std_all   = np.std(rms_flat)
     mean_all  = np.mean(rms_flat)
     xmax_linear = mean_all + 3 * std_all
+    bins_log = np.logspace(np.log10(xmin_log), np.log10(xmax), 100)
     bins = np.linspace(xmin, xmax_linear, 100)
 
     # log plot
@@ -346,7 +321,7 @@ def save_histogram(rms_flat, stat_rows, out_path, label='Full Image', temp=None)
 
     # linear plot
     ax[1].hist(rms_flat, bins=bins, alpha=0.7, label='All pixels')
-    ax[1].set_title(f"Median = {raw_row['median']:.2f} RMS e⁻, Temp = {temp}")
+    ax[1].set_title(f"Median = {raw_row['median']:2q.2f} RMS e⁻, Temp = {temp}")
     ax[1].axvline(raw_row['mean'],  color='orange', lw=1.5, linestyle='--', label=f"Mean (raw) = {raw_row['mean']:.2f}")
     ax[1].axvline(clip_row['mean'], color='pink',    lw=1.5, linestyle='-', label=f"Mean ({clip_sigma}σ clip) = {clip_row['mean']:.2f}")
     ax[1].set_xlabel('RMS (e⁻)')
@@ -437,6 +412,130 @@ def save_noise_fraction_plot(rms_flat, out_path, temp=None):
     plt.close()
     print(f"Saved noise fraction plot: {out_path}")
 
+# ------- for slides ---------------------------------------------------------------------------
+
+def save_slide_summary(rms_map, rms_flat, stat_rows, clean_boxes, out_path,
+                        temp=None, gain=None, device_label=None):
+    """
+    Combines hist (log+linear), noise fraction, and RMS map into one tiled PNG
+    for slide presentation. Duplicates plotting logic from save_histogram,
+    save_noise_fraction_plot, and save_rms_image (kept independent so the
+    standalone PNGs are unaffected by changes here and this can be commented out)
+    """
+
+    fig = plt.figure(figsize=(16, 9))
+    gs = fig.add_gridspec(2, 3, width_ratios=[1, 1, 1.6])
+    #gs = fig.add_gridspec(2, 3)
+
+    ax_hist_log   = fig.add_subplot(gs[0, 0])
+    ax_hist_lin   = fig.add_subplot(gs[0, 1])
+    ax_noise_frac = fig.add_subplot(gs[1, 0:2])
+    ax_rms_map    = fig.add_subplot(gs[:, 2])
+
+    raw_row    = next(r for r in stat_rows if r['stage'] == 'no_clipping')
+    clip_row   = next(r for r in stat_rows if r['stage'] != 'no_clipping')
+    clip_sigma = clip_row['sigma_clip']
+
+    rms_sorted = np.sort(rms_flat)
+    N = len(rms_sorted)
+    cumulative_fraction = np.arange(1, N+1)/N * 100
+
+    xmin = rms_flat[rms_flat > 0].min()
+    xmax = rms_flat.max()
+    xmin_log = max(xmin, 1e-6)
+    bins_log = np.logspace(np.log10(xmin_log), np.log10(xmax), 100)
+
+    std_all  = np.std(rms_flat)
+    mean_all = np.mean(rms_flat)
+    xmax_linear = mean_all + 3 * std_all
+    bins = np.linspace(xmin, xmax_linear, 100)
+
+    # --- log histogram ---
+    ax_hist_log.hist(rms_flat, bins=bins_log, alpha=0.7, label='All pixels')
+    ax_hist_log.set_xscale('log')
+    ax_hist_log.set_yscale('log')
+    ax_hist_log.axvline(raw_row['mean'], color='orange', lw=1.5, linestyle='--',
+                         label=f"Mean (raw) = {raw_row['mean']:.2f}")
+    ax_hist_log.axvline(clip_row['mean'], color='pink', lw=1.5, linestyle='-',
+                         label=f"Mean ({clip_sigma}σ clip) = {clip_row['mean']:.2f}")
+    ax_hist_log.set_xlabel('RMS (e⁻)')
+    ax_hist_log.set_ylabel('Number of pixels')
+    ax_hist_log_twin = ax_hist_log.twinx()
+    ax_hist_log_twin.plot(rms_sorted, cumulative_fraction, color='red', label='Cumulative')
+    ax_hist_log_twin.set_ylim(0, 100)
+    ax_hist_log_twin.set_ylabel('Fraction of pixels (%)')
+    ax_hist_log.set_xlim(xmin, xmax)
+    ax_hist_log.set_title('RMS Distribution — Full Image')
+    lines0, labels0 = ax_hist_log.get_legend_handles_labels()
+    lines02, labels02 = ax_hist_log_twin.get_legend_handles_labels()
+    ax_hist_log.legend(lines0 + lines02, labels0 + labels02, fontsize=8, loc='upper right')
+
+    # --- linear histogram ---
+    ax_hist_lin.hist(rms_flat, bins=bins, alpha=0.7, label='All pixels')
+    ax_hist_lin.set_title(f"Median = {raw_row['median']:.2f} RMS e⁻, Temp = {temp}")
+    ax_hist_lin.axvline(raw_row['mean'], color='orange', lw=1.5, linestyle='--',
+                         label=f"Mean (raw) = {raw_row['mean']:.2f}")
+    ax_hist_lin.axvline(clip_row['mean'], color='pink', lw=1.5, linestyle='-',
+                         label=f"Mean ({clip_sigma}σ clip) = {clip_row['mean']:.2f}")
+    ax_hist_lin.set_xlabel('RMS (e⁻)')
+    ax_hist_lin.set_ylabel('Number of pixels')
+    ax_hist_lin.set_xlim(xmin, xmax_linear)
+    ax_hist_lin_twin = ax_hist_lin.twinx()
+    ax_hist_lin_twin.plot(rms_sorted, cumulative_fraction, color='red', label='Cumulative')
+    ax_hist_lin_twin.set_ylim(0, 100)
+    ax_hist_lin_twin.set_ylabel('Fraction of pixels (%)')
+
+    # --- noise fraction plot ---
+    pct_low  = 0
+    pct_high = 0
+    n_low  = int(N * pct_low  / 100)
+    n_high = int(N * (1 - pct_high / 100))
+    rms_trimmed = rms_sorted[n_low:n_high]
+    N_trimmed = len(rms_trimmed)
+
+    percentages = np.linspace(1, 100, 200)
+    mean_rms = []
+    for pct in percentages:
+        n_keep = int(N_trimmed * pct / 100)
+        subset = rms_trimmed[:n_keep]
+        mean_rms.append(np.nan if len(subset) == 0 else np.mean(subset))
+
+    ax_noise_frac.plot(percentages, mean_rms, lw=1.5)
+    ax_noise_frac.set_xlabel('Fraction of pixels used (%)')
+    ax_noise_frac.set_ylabel('RMS Noise (e⁻)')
+    ax_noise_frac.set_title(f'RMS Noise vs Fraction of Pixels Used ({pct_low}% cut bottom, {pct_high}% cut top), Temp = {temp}')
+    ax_noise_frac.set_xticks(np.arange(0, 101, 5))
+    ax_noise_frac.grid(True, alpha=0.3)
+
+    # --- RMS map ---
+    vmin = np.percentile(rms_map, vmin_pct)
+    vmax = np.percentile(rms_map, vmax_pct)
+    im = ax_rms_map.imshow(rms_map, origin='lower', cmap='inferno',
+                            vmin=vmin, vmax=vmax, interpolation='nearest')
+    fig.colorbar(im, ax=ax_rms_map, label='RMS (e⁻)')
+    ax_rms_map.set_title(f'Per-pixel RMS Map (CDS), Temp = {temp}')
+    ax_rms_map.set_xlabel('X (pixels)')
+    ax_rms_map.set_ylabel('Y (pixels)')
+
+    if clean_boxes is not None:
+        for box in clean_boxes:
+            x      = box[1].start
+            y      = box[0].start
+            width  = box[1].stop - box[1].start
+            height = box[0].stop - box[0].start
+            rect = patches.Rectangle((x, y), width, height,
+                                      linewidth=1.5, edgecolor='red',
+                                      facecolor='none', linestyle='--')
+            ax_rms_map.add_patch(rect)
+
+    fig.suptitle(f"{device_label} - gain {gain} e/ADU, temp {temp} K", fontsize=18)
+    plt.tight_layout()
+    plt.savefig(out_path)
+    plt.close()
+    print(f"Saved slide summary: {out_path}")
+
+#---------------------------------------------------------------------------------------------
+
 
 def main():
     fits_path = args.input_fits
@@ -457,7 +556,7 @@ def main():
     csv_path        = os.path.join(out_dir, f"{basename}_stats.csv")
     cds_fits_path   = os.path.join(out_dir, f"{basename}_cds.fits")
     noise_frac_path = os.path.join(out_dir, f"{basename}_noise_fraction.png")
-    
+    slide_path = os.path.join(out_dir, f"{basename}_slide.png")
     #row_profile_path = os.path.join(out_dir, f"{basename}_row_profile.png")
 
     # Open fits file
@@ -480,14 +579,16 @@ def main():
     print("\nSaving outputs...")
     save_rms_fits(rms_map, fits_path, rms_fits_path)
     save_rms_image(rms_map, rms_img_path, temp=temp, clean_boxes=clean_boxes)
-    #(rms_map, row_profile_path)
+
 
     # Statistics
     print("\nComputing statistics...")
-    rms_flat  = rms_map.flatten()
     stat_rows = compute_stats(rms_flat, label='full_image', sigma_val=sigma_clip_value, max_iter=sigma_max_iterations, temp=temp,
                               GAINUSER_value=GAINUSER_value, gain=gain)
     print_stats(stat_rows)
+
+    save_slide_summary(rms_map, rms_flat, stat_rows, clean_boxes, slide_path, temp=temp, gain=gain, device_label=basename)
+
 
     save_noise_fraction_plot(rms_flat, noise_frac_path, temp=temp)
     save_histogram(rms_flat, stat_rows, hist_path, label='Full Image', temp=temp)
