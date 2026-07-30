@@ -130,10 +130,11 @@ def custom_sig_figs(val):
         return f"{val:.{decimals}f}"
 
 
-def compute_stats(arr: np.ndarray, clip_sigma=0, do_median=False) -> dict:
+def compute_stats(arr: np.ndarray, clip_sigma=0, do_median=False, quantiles=[]) -> dict:
     """
     Return mean, (optionally median,) stddev, and mean/stddev for an array.
     Flattens to float32; optionally sigma-clips.
+    quantiles is a list if percentages (0--100), e.g. [90,99, 99.9]
     """
     flat = arr.ravel().astype(np.float32)  # convert ADUf to ADUe if given
     if clip_sigma: # skips if None or 0
@@ -146,6 +147,10 @@ def compute_stats(arr: np.ndarray, clip_sigma=0, do_median=False) -> dict:
         row["med"] = fast_median(flat)
     row["std"]                             = std
     row["mean/std"]                        = mean / std
+
+    for k in quantiles:
+        row[str(k)] = np.quantile(flat, k/100.)
+        
     return row
 
 def compute_baseline_stats(row, roi=None, verbose=False, adu_convert=1, **kwargs):
@@ -154,16 +159,33 @@ def compute_baseline_stats(row, roi=None, verbose=False, adu_convert=1, **kwargs
     return compute_stats(arr[roi], **kwargs)
 
 def get_cds_image(row, roi=None, verbose=False, gainfits=False):
+    ''' Detect whether image is 2D or 3D.  If 3D, apply CDS subtraction ''' 
+
     if verbose: print(row['FILENAME'], row['EXTNAME'])
     kgain = row['GAINFITS'] if gainfits else int(1)
 
     arr = pf.getdata(row['FILENAME'], row['EXTN']).astype(np.int16) # enable values <0
 
-    roi3D = roi if len(roi)==3 else (slice(None),) + roi
-    assert len(roi3D) == 3
+    if arr.ndim==3 and len(roi)==3:
+        roi3D = roi
+    elif arr.ndim==3 and len(roi)==2:
+        roi3D = (slice(None),) + roi
+    elif arr.ndim==2 and len(roi)==3:
+        roi3D = roi[1:]
+    elif arr.ndim==2 and len(roi)==2:
+        roi3D = roi
+    else:
+        print('UNKNOWN IMAGE FORMAT')
+        import sys
+        sys.exit(-1)
+
+    # roi3D = roi if len(roi)==3 else (slice(None),) + roi
+    if len(roi3D) != arr.ndim:
+        sys.exit('Mismatched image and ROI dimensions')
 
     arr = arr[roi3D]  # Extract region before CDS subtraction (for efficiency)
-    img = (arr[1] - arr[0]) * kgain
+    img = arr[1] - arr[0] if arr.ndim == 3 else arr
+    img = img * kgain
     return img
 
 def compute_cds_stats(row, roi=None, verbose=False, gainfits=False, **kwargs):

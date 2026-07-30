@@ -14,14 +14,12 @@ import RCtools
 
 TIMEKEY = 'EXPTIME'
 TGKEY = 'VHIGH_TG'
-t_dark = 2.0 # TIMEKEY value for the short dark exposures
 SIGMACLIP = 3.
+HISTMAX_QUANTILE = 99.9  # Used to limit x-range of lag histograms
 
 LEDVlist = [1.945, 2.363, 3.165]  # LED voltages for each FITS file
+# LEDVlist = [2.4, 2.4, 2.4]  # LED voltages for each FITS file
 
-# VHIGH_TG_list = [1.8, 1.9, 2.0, 2.1, 2.2, 2.3] # Hardcoded order in single CLRTESTx file
-N_CLRTEST = 240 # Expected number of extensions in single CLRTESTx file
-N_LAG = 4  # number of extensions after the flash to use for lag measurements
 
 ##########################################
 
@@ -114,7 +112,8 @@ def make_output_stem(clrtest1_path, outdir):
 def main():
     args = parse_args()
 
-    files = find_clrtest_files(args.files)
+    # files = find_clrtest_files(args.files) # Require clrtest 1-2-3 pattern
+    files = resolve_files(args.files)
     is_csv = len(files) == 1 and files[0].lower().endswith('.csv')
 
     # Validate --roi presence depending on input type
@@ -143,10 +142,6 @@ def main():
         dflist = []
         for f, ledv in zip(flist, LEDVlist):
             dfi = RCtools.all_headers_to_df(f)
-            assert len(dfi) == N_CLRTEST, f"{f}: expected {N_CLRTEST} extensions, got {len(dfi)}"
-            # assert N_CLRTEST % len(VHIGH_TG_list) == 0, 'N_CLRTEST must be divisible by number of VHIGH_TG values'
-            # NVrepeat = N_CLRTEST // len(VHIGH_TG_list)
-            # dfi['VHIGH_TG'] = np.tile(VHIGH_TG_list, (NVrepeat, 1)).T.flatten()
             dfi['LEDV'] = ledv
             dflist.append(dfi)
 
@@ -156,14 +151,8 @@ def main():
         header_list = ['FILENAME', 'EXTN', 'EXTNAME', TIMEKEY, 'GAINFITS', 'LEDV', TGKEY]
         df = df[header_list]
 
-        # Identify extensions with LED flash and subsequent darks
-        df['FLASH'] = df[TIMEKEY] > 2.0  ### Identify flashes as the longer exposures
-        i_flash = df.index[df['FLASH'] == True]
-
-        flashi = np.array([-1]*len(df))
-        for ii in range(N_LAG+1):
-            flashi[i_flash + ii] = ii
-        df['FLASHI'] = flashi  # FLASHI column is 0 for each flash and counts up
+        # Round the exposure times to avoid lots of unique values from ms imprecision
+        df[TIMEKEY] = df[TIMEKEY].round(2)
 
         # Convert VHIGH_TG to volts
         df[TGKEY] = round( RCtools.DAC_to_V(df[TGKEY]) , 2)
@@ -171,21 +160,39 @@ def main():
         print('Processing images...')
         gainfits = True
         rows = df.progress_apply(RCtools.compute_cds_stats,
-                        axis=1, clip_sigma=SIGMACLIP, do_median=False, roi=roi, gainfits=gainfits).tolist()
+                        axis=1, clip_sigma=SIGMACLIP, do_median=False, quantiles=[HISTMAX_QUANTILE], roi=roi, gainfits=gainfits).tolist() ### HARDCODED QUANTILE
 
         df['units'] = 'e-' if gainfits else 'ADUf'
         df = pd.concat([df, pd.DataFrame(rows)], axis=1)
+
 
         # ── Save CSV ─────────────────────────────────────────────────────────
         outcsv = stem + '.csv'
         df.to_csv(outcsv, index=False)
         print(f'Saved: {outcsv}')
 
-    # Identify units for plots
-    units = df['units'].iloc[0]  # Assumes all units are same
+    # -- Identify the flash / dark pattern ------------------------------
+
+    # Guess the dark exposure time from the last image
+    t_dark = df[TIMEKEY].iloc[-1]
+
+    # Identify extensions with LED flash and subsequent darks
+    df['FLASH'] = (df[TIMEKEY] != t_dark) * (df[TIMEKEY]>0)  ### WARNING: Skips the flash if it has same exptime as darks
+    i_flash = df.index[df['FLASH'] == True]
+
+    # Guess the number of lag measurements (darks) from the last flash index
+    N_LAG = max(df.index) - max(i_flash)
+
+    flashi = np.array([-1]*len(df))
+    for ii in range(N_LAG+1):
+        flashi[i_flash + ii] = ii
+    df['FLASHI'] = flashi  # FLASHI column is 0 for each flash and counts up
 
 
     print('Starting plots...')
+
+    # Identify units for plots
+    units = df['units'].iloc[0]  # Assumes all units are same
 
     # ── Timeseries of ROI mean for each VHIGH_TG ──────────────────────────────
 
@@ -196,16 +203,24 @@ def main():
     fig, axes = plt.subplots(nrows=len(vlist), sharex=True, 
                             figsize=(8, 2.5*len(vlist))) # scale figure to number of bias voltages
 
-    ax = axes[0]
-    ax.text(1, 1.1, 'LEDV', transform=ax.transAxes)
+    # Convert into a 1-element list if only 1 axis
+    axlist = [axes] if isinstance(axes, plt.Axes) else axes
+    ax = axlist[0]
+    ax.text(1.02, 1.01, 'LEDV', transform=ax.transAxes)
+    ax.text(.05, 1.01, TGKEY, transform=ax.transAxes)
 
-    for ax,v in zip(axes,vlist):
+    for ax,v in zip(axlist,vlist):
         df_v = df[df['LEDV'] == v].reset_index()
 
         ax.plot(df_v['mean'], label=f'{v}')
         # ax.legend(title=TGKEY, loc='center left')
         ax.text(1.02, 0.5, str(v), transform=ax.transAxes)
         ax.set_ylabel(f'ROI mean ({units})')
+
+        # VHIGH_TG labels aligned to x positions
+        for tg in df_v[TGKEY].unique():
+            x = df_v[df_v[TGKEY]==tg].index.start  # first index with this VHIGH_TG
+            ax.text(x, df_v['mean'].max()*0.9, f'{tg}')
 
     plt.xlabel('Frame Number')
     # plt.tight_layout()
@@ -230,6 +245,9 @@ def main():
         y = df_v.loc[i_flash + 1]['mean'].values   # images just after flashes
         z = df_v.loc[i_flash - 1]['mean'].values   # images just before flashes
 
+        ### HARDCODE
+        # z = z*0
+
         axes[0].plot(x-z, y-z, label=f'{v}', 
                     markersize=markersize, marker=marker)
 
@@ -243,19 +261,22 @@ def main():
     axes[0].legend(title=f'{TGKEY}')
     axes[1].legend(title=f'{TGKEY}')
 
+    ### HARDCODED LIMITS
+    axes[0].set_xlim(10,1.5E5)
+    axes[0].set_ylim(-10,1000)  # Absolute
+    axes[1].set_xlim(10,1.5E5)
+    axes[1].set_ylim(-.01,.3)   # Fraction
+
     plt.tight_layout()
     plt.savefig(outpng)
     # plt.show()
     print('Saved '+outpng)
 
-    # breakpoint()
-
 
     # ── Plot Lag vs. frame for each VHIGH_TG, highest stimulus only ──────────────────────────────
     outpng = stem + '_lagt.png'
 
-    # plt.figure(figsize=(5, 10))
-    plt.figure()
+    fig, ax = plt.subplots()
     plt.title('Timeseries after flash (Frame 0)')
 
     df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
@@ -267,16 +288,67 @@ def main():
         i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Brightest flash
         i_flash = i_flash[0] # Should only have 1 element
 
-        y = df_v.loc[i_flash:i_flash+N_LAG]['mean']  # series after flash
+        y = df_v.loc[i_flash:i_flash+N_LAG]['mean'].values  # series after flash
         z = df_v.loc[i_flash - 1]['mean']   # images just before flashes
 
-        plt.plot(range(len(y)), y.values - z, label=f'{v}',
+        ### HARDCODE for dark subtraction test
+        # z = z*0
+        w = y-z
+
+        ax.plot(range(len(y)), w, label=f'{v}',
                     markersize=markersize, marker=marker)
 
-    plt.yscale('log')
-    plt.xlabel('Frame #')
-    plt.ylabel(f'ROI mean ({units})')
+    ax.set_yscale('log')
+    ax.set_xlabel('Frame #')
+    ax.set_ylabel(f'ROI mean ({units})')
+
+    # Add a second x-axis for exposure time
+    secax = ax.secondary_xaxis('bottom', functions=(lambda x: x*t_dark, lambda x: x/t_dark))
+    secax.set_xlabel("Total elapsed time (s)")
+    secax.spines['bottom'].set_position(('outward', 40)) # push the 2nd axis down to prevent overlap
+
     plt.legend(title=f'{TGKEY}')
+    plt.tight_layout()
+    plt.savefig(outpng)
+    print('Saved '+outpng)
+
+
+    # ── Plot CUMULATIVE Lag vs. frame for each VHIGH_TG, highest stimulus only ──────────────────────────────
+    outpng = stem + '_lagt_sum.png'
+
+    fig, ax = plt.subplots()
+    plt.title('Cumulative lag after flash (Frame 0)')
+
+    df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
+    # df_max = df[df['LEDV']==max(LEDVlist)].reset_index()  # Brightest LED setting
+
+    for v in df_max[TGKEY].unique():
+        df_v = df_max[df_max[TGKEY] == v].reset_index()
+
+        i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Brightest flash
+        i_flash = i_flash[0] # Should only have 1 element
+
+        y = df_v.loc[i_flash:i_flash+N_LAG]['mean'].values  # series after flash
+        z = df_v.loc[i_flash - 1]['mean']   # images just before flashes
+
+        ### HARDCODE for dark subtraction test
+        # z = z*0
+        w = y-z
+
+        ax.plot(range(len(y))[1:], np.cumsum(w[1:]), label=f'{v}',
+                    markersize=markersize, marker=marker)
+
+    # plt.yscale('log')
+    ax.set_xlabel('Frame #')
+    ax.set_ylabel(f'ROI mean ({units})')
+
+    # Add a second x-axis for exposure time
+    secax = ax.secondary_xaxis('bottom', functions=(lambda x: x*t_dark, lambda x: x/t_dark))
+    secax.set_xlabel("Total integration time (s)")
+    secax.spines['bottom'].set_position(('outward', 40)) # push the 2nd axis down to prevent overlap
+
+    plt.legend(title=f'{TGKEY}')
+    plt.tight_layout()
     plt.savefig(outpng)
     # plt.show()
     print('Saved '+outpng)
@@ -290,7 +362,7 @@ def main():
 
     i_flash = df_max.index[(df_max[TIMEKEY]==df_max[TIMEKEY].max())]  # List of max flashes, 1 for each VHIGH_TG
 
-    ## HARDCODES
+    ### HARDCODES
 
     roi = (slice(10,410), slice(256*2,256*3))
     BINSTEP = 1
@@ -305,7 +377,8 @@ def main():
 
         kgain = df_lag['GAINFITS'].iloc[0]
 
-        binmax = int( df_max[df_max['FLASHI']==ii]['mean'].max() * MAXMARGIN )
+        # binmax = int( df_max[df_max['FLASHI']==ii]['mean'].max() * MAXMARGIN )
+        binmax = df_lag[str(HISTMAX_QUANTILE)].max()
         bins = np.arange(0,binmax,BINSTEP*kgain)  # Scale BINSTEP by kgain to avoid weird rounding effects in plots
         x = (bins[1:]+bins[:-1])/2
 
@@ -324,8 +397,6 @@ def main():
         # plt.show()
         plt.savefig(outpng)
         print('Saved '+outpng)
-
-    # breakpoint()
 
 
 if __name__ == '__main__':
