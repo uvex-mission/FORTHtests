@@ -385,7 +385,7 @@ def main():
         plt.figure()
         plt.title(f'Lag Histogram ({ii} frames after flash)')
 
-        hist_list = df_lag.progress_apply(RCtools.compute_cds_histogram, axis=1, roi=roi, gainfits=gainfits, bins=bins).tolist()
+        hist_list = df_lag.apply(RCtools.compute_cds_histogram, axis=1, roi=roi, gainfits=gainfits, bins=bins).tolist()
 
         for (y, v) in zip(hist_list, df_lag[TGKEY]):
             plt.plot(x, y, label=v)
