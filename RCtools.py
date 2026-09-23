@@ -5,6 +5,7 @@ import glob
 import numpy as np
 import os
 import pandas as pd
+import sys
 
 
 GAIN_NOMINAL = 1.06   ### HIGH GAIN e/ADU before LSB drop
@@ -12,10 +13,34 @@ GAIN_LO_o_HI = 7.5 # Ratio of low to high conversion gains
 
 SIGFIG = 4  # Max significant figures for decimals in results table
 
-def DAC_to_V(dac):
-    ''' PPROXIMATE V/DN for several biases '''
-    slope = 3.76 / 768
-    return dac * slope
+VOLTS_SINCE = (2, 0, 0)     # SCHEMA_V >= this: bias voltage keys are already in volts
+
+def _schema_tuple(s):
+    try:
+        return tuple(int(x) for x in str(s).split('.'))
+    except Exception:
+        return (0, 0, 0)   # missing/unparseable -> treat as pre-schema
+
+def check_dac_units(df):
+    '''
+    sys.exit(1) if SCHEMA_V indicates the bias voltage header keys (VLOW_ROW,
+    VLOW_TG, VHIGH_TG, PIX_REF, VH_BIAS, V_EXTRA, V8OFFV) are still raw DAC
+    counts, not volts. Call this immediately after loading headers, before
+    SCHEMA_V/FILENAME get trimmed from the working DataFrame.
+    '''
+    if 'SCHEMA_V' not in df.columns:
+        print("FATAL ERROR: No SCHEMA_V header found; cannot confirm bias voltages are in volts.")
+        print("Re-run tdms_to_fits.py (schema >= 2.0.0) on the affected file(s) before analyzing.")
+        sys.exit(1)
+
+    legacy = df['SCHEMA_V'].apply(_schema_tuple).apply(lambda t: t < VOLTS_SINCE)
+    if legacy.any():
+        files = sorted(df.loc[legacy, 'FILENAME'].unique()) if 'FILENAME' in df.columns else []
+        print(f"FATAL ERROR: {int(legacy.sum())} row(s) predate SCHEMA_V "
+              f"{'.'.join(map(str, VOLTS_SINCE))}; bias voltages are raw DAC counts, "
+              f"not volts, in: {files}.")
+        print("Re-run tdms_to_fits.py (schema >= 2.0.0) on the affected file(s) before analyzing.")
+        sys.exit(1)
 
 
 def extract_fits_keys(filename):

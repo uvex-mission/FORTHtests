@@ -17,8 +17,8 @@ TGKEY = 'VHIGH_TG'
 SIGMACLIP = 3.
 HISTMAX_QUANTILE = 99.9  # Used to limit x-range of lag histograms
 
-LEDVlist = [1.945, 2.363, 3.165]  # LED voltages for each FITS file
-# LEDVlist = [2.4, 2.4, 2.4]  # LED voltages for each FITS file
+# LEDVlist = [1.945, 2.363, 3.165]  # LED voltages for each FITS file
+LEDVlist = [3.165,3.165,3.165]  # LED voltages for each FITS file
 
 
 ##########################################
@@ -179,7 +179,11 @@ def main():
     t_dark = df[TIMEKEY].iloc[-1]
 
     # Identify extensions with LED flash and subsequent darks
-    df['FLASH'] = (df[TIMEKEY] != t_dark) * (df[TIMEKEY]>0)  ### WARNING: Skips the flash if it has same exptime as darks
+    # df['FLASH'] = (df[TIMEKEY] != t_dark) * (df[TIMEKEY]>0)  ### WARNING: Skips the flash if it has same exptime as darks
+
+    df['FLASH'] = df[TIMEKEY] > 1.5  ### TEMP HARDCODE
+
+
     i_flash = df.index[df['FLASH'] == True]
 
     # Guess the number of lag measurements (darks) from the last flash index
@@ -196,7 +200,7 @@ def main():
     # Identify units for plots
     units = df['units'].iloc[0]  # Assumes all units are same
 
-    # ── Timeseries of ROI mean for each VHIGH_TG ──────────────────────────────
+    # # ── Timeseries of ROI mean for each VHIGH_TG ──────────────────────────────
 
     outpng = stem + '_tseries.png'
 
@@ -229,6 +233,7 @@ def main():
     plt.savefig(outpng)
     # plt.show()
     print('Saved '+outpng)
+    plt.close()
 
     # ── Plot 1st Lag vs. stimulus for each VHIGH_TG ──────────────────────────────
 
@@ -243,6 +248,7 @@ def main():
         df_v = df[df[TGKEY] == v].reset_index()
 
         i_flash = df_v.index[df_v['FLASH'] == True]
+        # breakpoint()
         x = df_v.loc[i_flash]['mean'].values       # images with flashes
         y = df_v.loc[i_flash + 1]['mean'].values   # images just after flashes
         z = df_v.loc[i_flash - 1]['mean'].values   # images just before flashes
@@ -264,15 +270,16 @@ def main():
     axes[1].legend(title=f'{TGKEY}')
 
     ### HARDCODED LIMITS
-    axes[0].set_xlim(10,1.5E5)
-    axes[0].set_ylim(-10,1000)  # Absolute
-    axes[1].set_xlim(10,1.5E5)
-    axes[1].set_ylim(-.01,.3)   # Fraction
+    # axes[0].set_xlim(10,1.5E5)
+    # axes[0].set_ylim(-10,1000)  # Absolute
+    # axes[1].set_xlim(10,1.5E5)
+    # axes[1].set_ylim(-.01,.3)   # Fraction
 
     plt.tight_layout()
     plt.savefig(outpng)
     # plt.show()
     print('Saved '+outpng)
+    plt.close()
 
 
     # ── Plot Lag vs. frame for each VHIGH_TG, highest stimulus only ──────────────────────────────
@@ -287,7 +294,8 @@ def main():
     for v in df_max[TGKEY].unique():
         df_v = df_max[df_max[TGKEY] == v].reset_index()
 
-        i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Brightest flash
+        i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Only Brightest flash
+        # i_flash = df_v.index[df_v[TIMEKEY]==19.0]  # Only 19s flash
         i_flash = i_flash[0] # Should only have 1 element
 
         y = df_v.loc[i_flash:i_flash+N_LAG]['mean'].values  # series after flash
@@ -297,10 +305,10 @@ def main():
         # z = z*0
         w = y-z
 
-        ax.plot(range(len(y)), w, label=f'{v}',
+        ax.plot(range(len(y))[1:], w[1:], label=f'{v}',
                     markersize=markersize, marker=marker)
 
-    ax.set_yscale('log')
+    # ax.set_yscale('log')
     ax.set_xlabel('Frame #')
     ax.set_ylabel(f'ROI mean ({units})')
 
@@ -313,6 +321,7 @@ def main():
     plt.tight_layout()
     plt.savefig(outpng)
     print('Saved '+outpng)
+    plt.close()
 
 
     # ── Plot CUMULATIVE Lag vs. frame for each VHIGH_TG, highest stimulus only ──────────────────────────────
@@ -328,6 +337,7 @@ def main():
         df_v = df_max[df_max[TGKEY] == v].reset_index()
 
         i_flash = df_v.index[df_v[TIMEKEY]==df_v[TIMEKEY].max()]  # Brightest flash
+        # i_flash = df_v.index[df_v[TIMEKEY]==19.0]  # 19s flash
         i_flash = i_flash[0] # Should only have 1 element
 
         y = df_v.loc[i_flash:i_flash+N_LAG]['mean'].values  # series after flash
@@ -354,51 +364,53 @@ def main():
     plt.savefig(outpng)
     # plt.show()
     print('Saved '+outpng)
+    plt.close()
 
 
-    # -- Plot histograms for all VHIGH_TG ------------------------------------
-    print('Plotting histograms...')
+    # # -- Plot histograms for all VHIGH_TG ------------------------------------
+    # print('Plotting histograms...')
 
-    df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
-    # df_max = df[df['LEDV']==max(LEDVlist)].reset_index()  # Brightest LED setting
+    # df_max = df[df['LEDV']==LEDVlist[1]].reset_index()  # Brightest high-gain LED setting
+    # # df_max = df[df['LEDV']==max(LEDVlist)].reset_index()  # Brightest LED setting
 
-    i_flash = df_max.index[(df_max[TIMEKEY]==df_max[TIMEKEY].max())]  # List of max flashes, 1 for each VHIGH_TG
+    # i_flash = df_max.index[(df_max[TIMEKEY]==df_max[TIMEKEY].max())]  # List of max flashes, 1 for each VHIGH_TG
 
-    ### HARDCODES
+    # ### HARDCODES
 
-    roi = (slice(10,410), slice(256*2,256*3))
-    BINSTEP = 1
-    gainfits = True
-    units = 'e-' if gainfits else 'ADUf'
-    MAXMARGIN = 3  # Histogram upper limit -- multiplies max mean lag of each VHIGH_TG
+    # roi = (slice(10,410), slice(256*2,256*3))
+    # BINSTEP = 1
+    # gainfits = True
+    # units = 'e-' if gainfits else 'ADUf'
+    # MAXMARGIN = 3  # Histogram upper limit -- multiplies max mean lag of each VHIGH_TG
 
-    for ii in np.arange(N_LAG)+1:  # count frames after each flash
+    # for ii in np.arange(N_LAG)+1:  # count frames after each flash
 
-        outpng = stem + f'_hist{ii}.png'
-        df_lag = df_max.loc[i_flash+ii] # iith row after the flashes 
+    #     outpng = stem + f'_hist{ii}.png'
+    #     df_lag = df_max.loc[i_flash+ii] # iith row after the flashes 
 
-        kgain = df_lag['GAINFITS'].iloc[0]
+    #     kgain = df_lag['GAINFITS'].iloc[0]
 
-        # binmax = int( df_max[df_max['FLASHI']==ii]['mean'].max() * MAXMARGIN )
-        binmax = df_lag[str(HISTMAX_QUANTILE)].max()
-        bins = np.arange(0,binmax,BINSTEP*kgain)  # Scale BINSTEP by kgain to avoid weird rounding effects in plots
-        x = (bins[1:]+bins[:-1])/2
+    #     # binmax = int( df_max[df_max['FLASHI']==ii]['mean'].max() * MAXMARGIN )
+    #     binmax = df_lag[str(HISTMAX_QUANTILE)].max()
+    #     bins = np.arange(0,binmax,BINSTEP*kgain)  # Scale BINSTEP by kgain to avoid weird rounding effects in plots
+    #     x = (bins[1:]+bins[:-1])/2
 
-        plt.figure()
-        plt.title(f'Lag Histogram ({ii} frames after flash)')
+    #     plt.figure()
+    #     plt.title(f'Lag Histogram ({ii} frames after flash)')
 
-        hist_list = df_lag.apply(RCtools.compute_cds_histogram, axis=1, roi=roi, gainfits=gainfits, bins=bins).tolist()
+    #     hist_list = df_lag.apply(RCtools.compute_cds_histogram, axis=1, roi=roi, gainfits=gainfits, bins=bins).tolist()
 
-        for (y, v) in zip(hist_list, df_lag[TGKEY]):
-            plt.plot(x, y, label=v)
+    #     for (y, v) in zip(hist_list, df_lag[TGKEY]):
+    #         plt.plot(x, y, label=v)
 
-        plt.legend(title=f'{TGKEY}', loc='upper right')
-        plt.xlabel(f'Lag ({units})')
-        plt.ylabel('Frequency')
+    #     plt.legend(title=f'{TGKEY}', loc='upper right')
+    #     plt.xlabel(f'Lag ({units})')
+    #     plt.ylabel('Frequency')
 
-        # plt.show()
-        plt.savefig(outpng)
-        print('Saved '+outpng)
+    #     # plt.show()
+    #     plt.savefig(outpng)
+    #     print('Saved '+outpng)
+    #     plt.close()
 
 
 if __name__ == '__main__':

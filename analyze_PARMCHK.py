@@ -72,6 +72,7 @@ def analyze_fits(fits_path: str, clip_sigma: float | None,
 
     # Start with table of metadata for easy organization
     df_all = all_headers_to_df(fits_path)
+    check_dac_units(df_all)   # hard-fails if V_EXTRA isn't already in volts
 
     e_per_ADU = df_all['GAINFITS']
     KSCALE = df_all['KSCALE']  # Factor applied to FITS file to reduce file size
@@ -101,7 +102,7 @@ def analyze_fits(fits_path: str, clip_sigma: float | None,
     df['std_thresh_V'] = MEANoverSIG_IDEAL*df['std']*V_per_ADU
     df['maxout_V'] = V_MAX - df['std_thresh_V']
 
-    df['V_EXTRA'] = DAC_to_V(df['V_EXTRA'])  # Convert V_EXTRA DAC setting to Volts
+    # V_EXTRA is already in volts (tdms_to_fits.py schema >= 2.0.0)
     df.insert(len(df.columns)-1, 'V_EXTRA', df.pop('V_EXTRA'))  # move column to last (so far)
 
     baseline_V = (df['mean'] - df['mean'].iloc[i_testen]) * V_per_ADU
