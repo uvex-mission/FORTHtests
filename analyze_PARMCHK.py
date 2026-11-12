@@ -78,7 +78,6 @@ def analyze_fits(fits_path: str, clip_sigma: float | None,
     KSCALE = df_all['KSCALE']  # Factor applied to FITS file to reduce file size
     # TRY: GAIN_F2E = df_all['GAIN_F2E']
 
-    e_per_ADU[i_lowgain:] *= GAIN_LO_o_HI      # Adjust Low gain values
     V_per_ADU = ADU_to_V(df_all['PIXELT'], df_all['SETTLET'], df_all['LSB_DROP']) *KSCALE
     # V_per_e = V_per_ADU / e_per_ADU
 
@@ -102,7 +101,7 @@ def analyze_fits(fits_path: str, clip_sigma: float | None,
     df['std_thresh_V'] = MEANoverSIG_IDEAL*df['std']*V_per_ADU
     df['maxout_V'] = V_MAX - df['std_thresh_V']
 
-    # V_EXTRA is already in volts (tdms_to_fits.py schema >= 2.0.0)
+    # V_EXTRA is already in volts (bin2fits.py schema >= 2.0.0)
     df.insert(len(df.columns)-1, 'V_EXTRA', df.pop('V_EXTRA'))  # move column to last (so far)
 
     baseline_V = (df['mean'] - df['mean'].iloc[i_testen]) * V_per_ADU

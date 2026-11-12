@@ -9,7 +9,6 @@ import sys
 
 
 GAIN_NOMINAL = 1.06   ### HIGH GAIN e/ADU before LSB drop
-GAIN_LO_o_HI = 7.5 # Ratio of low to high conversion gains
 
 SIGFIG = 4  # Max significant figures for decimals in results table
 
@@ -30,7 +29,7 @@ def check_dac_units(df):
     '''
     if 'SCHEMA_V' not in df.columns:
         print("FATAL ERROR: No SCHEMA_V header found; cannot confirm bias voltages are in volts.")
-        print("Re-run tdms_to_fits.py (schema >= 2.0.0) on the affected file(s) before analyzing.")
+        print("Re-run bin2fits (schema >= 2.0.0) on the affected file(s) before analyzing.")
         sys.exit(1)
 
     legacy = df['SCHEMA_V'].apply(_schema_tuple).apply(lambda t: t < VOLTS_SINCE)
@@ -39,7 +38,7 @@ def check_dac_units(df):
         print(f"FATAL ERROR: {int(legacy.sum())} row(s) predate SCHEMA_V "
               f"{'.'.join(map(str, VOLTS_SINCE))}; bias voltages are raw DAC counts, "
               f"not volts, in: {files}.")
-        print("Re-run tdms_to_fits.py (schema >= 2.0.0) on the affected file(s) before analyzing.")
+        print("Re-run bin2fits (schema >= 2.0.0) on the affected file(s) before analyzing.")
         sys.exit(1)
 
 
