@@ -67,7 +67,7 @@ imgcube = imgcube[1]-imgcube[0]  # CDS image cube
 titles = [f'NOGLO {i+8}' for i in range(len(imgcube))]
 
 percentX = np.array([ np.percentile(img, 95) for img in imgcube ])
-vmin=0
+vmin=1
 vmax = VMAX if VMAX else sorted(percentX)[-2]  # 2nd highest value -- we know highest is an outlier
 
 
@@ -88,7 +88,7 @@ def plot_array_grid(arrays, titles=titles, figsize=(16, 8), **kwargs):
     fig, axes = plt.subplots(2, 4, figsize=figsize)
 
     for i, (ax, arr) in enumerate(zip(axes.flat, arrays)):
-        im = ax.imshow(arr, origin='lower', **kwargs)
+        im = ax.imshow(arr, **kwargs)
 
         if titles:
             ax.set_title(titles[i])
@@ -105,7 +105,8 @@ def plot_array_grid(arrays, titles=titles, figsize=(16, 8), **kwargs):
     return fig
 
 print('Plotting...')
-fig = plot_array_grid(imgcube, titles=titles, vmin=vmin, vmax=vmax)
+from matplotlib import colors
+fig = plot_array_grid(imgcube, titles=titles, norm=colors.LogNorm(vmin=vmin, vmax=vmax))
 
 plt.savefig(OUTFILE)
 print('SAVED:',OUTFILE)

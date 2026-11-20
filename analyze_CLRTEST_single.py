@@ -156,7 +156,7 @@ def main():
         # Round the exposure times to avoid lots of unique values from ms imprecision
         df[TIMEKEY] = df[TIMEKEY].round(2)
 
-        # VHIGH_TG is already in volts (tdms_to_fits.py schema >= 2.0.0); round for display
+        # VHIGH_TG is already in volts (bin2fits.py schema >= 2.0.0); round for display
         df[TGKEY] = round(df[TGKEY], 2)
 
         print('Processing images...')

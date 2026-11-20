@@ -251,7 +251,7 @@ def save_rms_image(rms_map, out_path, temp=None, clean_boxes=None):
     vmin = np.percentile(rms_map, vmin_pct)
     vmax = np.percentile(rms_map, vmax_pct)
     fig, ax = plt.subplots(figsize=(8, 8))
-    im = ax.imshow(rms_map, origin='lower', cmap='inferno',
+    im = ax.imshow(rms_map, cmap='inferno',
                    vmin=vmin, vmax=vmax, interpolation='nearest')
     plt.colorbar(im, ax=ax, label='RMS (e⁻)')
     ax.set_title(f'Per-pixel RMS Map (CDS), Temp = {temp}')
@@ -510,7 +510,7 @@ def save_slide_summary(rms_map, rms_flat, stat_rows, clean_boxes, out_path,
     # --- RMS map ---
     vmin = np.percentile(rms_map, vmin_pct)
     vmax = np.percentile(rms_map, vmax_pct)
-    im = ax_rms_map.imshow(rms_map, origin='lower', cmap='inferno',
+    im = ax_rms_map.imshow(rms_map, cmap='inferno',
                             vmin=vmin, vmax=vmax, interpolation='nearest')
     fig.colorbar(im, ax=ax_rms_map, label='RMS (e⁻)')
     ax_rms_map.set_title(f'Per-pixel RMS Map (CDS), Temp = {temp}')
